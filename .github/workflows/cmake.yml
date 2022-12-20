@@ -22,6 +22,7 @@ jobs:
         uses: lukka/run-vcpkg@v5
         with:
           setupOnly: true
+          vcpkgGitCommitId: 6a19c0f10a9a76440aade27c5b6015a55a149528
 
       # Now that vcpkg is installed, it is being used to run desired arguments.
       - run: |
