@@ -4,13 +4,15 @@ module;
 module gta_remix_fixes;
 import executable_injection;
 
-[[maybe_unused]] auto d3dDevice = *(IDirect3DDevice9 **)0xC97C28;
+[[maybe_unused]] auto& d3dDevice = *(IDirect3DDevice9 **)0xC97C28;
 // An empty func to no-op some calls
 [[maybe_unused]] void empty_void() {}
 [[maybe_unused]] bool true_ret_hook() { return true; }
 [[maybe_unused]] bool false_ret_hook() { return false; }
 
 #pragma region Lighting Fixes
+
+DWORD LightCount; ///< global value to hold current light count for scene
 
 /// Method to resolve lighting for object, we disable it because game creates
 /// directional lights instead of point/spot/etc. lights
@@ -22,9 +24,7 @@ double CPointLights_GenerateLightsAffectingObject(
   return 1.0;
 }
 
-/*
- * TODO: Implement light injection, to do that it seems that we would need
- * to hold a separate light counter
+
 void __cdecl CPointLights_AddLight(
     char type,
     D3DVECTOR pos,
@@ -37,21 +37,73 @@ void __cdecl CPointLights_AddLight(
     char generateExtraShadows,
     void *entityAffected)
 {
-    static DWORD light_id = 0;
-    auto dev = *(IDirect3DDevice9 **)0xC97C28;
+  if(type != 0 && type != 1 && type !=3) return;
     D3DLIGHT9 l{};
     l.Position.x = pos.x;
     l.Position.y = pos.y;
     l.Position.z = pos.z;
-    l.Type = D3DLIGHTTYPE::D3DLIGHT_POINT;
-    dev->SetLight(light_id, )
-}*/
+    l.Direction.x = dir.x;
+    l.Direction.y = dir.y;
+    l.Direction.z = dir.z;
+    l.Diffuse.r = red;
+    l.Diffuse.g = green;
+    l.Diffuse.b = blue;
+    l.Ambient.r  = 1.0f;
+    l.Ambient.g  = 1.0f;
+    l.Ambient.b  = 1.0f;
+    l.Specular.r = 1.0f;
+    l.Specular.g = 1.0f;
+    l.Specular.b = 1.0f;
+    l.Range = radius * 2;
+
+    if(type == 0 || type == 1) {
+      l.Type = D3DLIGHTTYPE::D3DLIGHT_POINT;
+      l.Attenuation2 = 1.0f;
+    }/*else if (type == 1)
+    {
+      l.Type = D3DLIGHTTYPE::D3DLIGHT_SPOT;
+      l.Attenuation2 = 1.0f;
+    } */
+    else {
+      l.Type = D3DLIGHTTYPE::D3DLIGHT_DIRECTIONAL;
+      l.Attenuation1 = 1.0f;
+    }
+    d3dDevice->SetLight(LightCount, &l );
+    d3dDevice->LightEnable(LightCount++, true );
+}
+
+void SetupLighting()
+{
+  LightCount = 0;
+  auto *vec_to_sun_arr   = (D3DVECTOR *)0xB7CA50;
+  int  &current_tc_value = *(int *)0xB79FD0;
+  auto dir = vec_to_sun_arr[current_tc_value];
+  dir.x = -dir.x;
+  dir.y = -dir.y;
+  dir.z = -dir.z;
+  D3DVECTOR pos{0,0,0};
+  CPointLights_AddLight(3, pos, dir, 2000, 1, 1, 1, 0, 0, nullptr);
+}
+
+int EnableLights()
+{
+  using RwD3D9SetRenderStateF = int (*)(int state, int value);
+  auto set_rs = (RwD3D9SetRenderStateF)0x7FC2D0;
+  set_rs(137, 1);
+  return 1;
+}
 
 void fix_Lighting()
 {
   RedirectJump(0x6FFBB0, &CPointLights_GenerateLightsAffectingObject);
   // Lights
-  //RedirectJump( 0x7000E0, reinterpret_cast<void *>( CPointLights_AddLight ) );
+  RedirectJump( 0x7000E0, &CPointLights_AddLight );
+  RedirectJump(0x7354E0, &SetupLighting);
+  RedirectJump(0x756070, &EnableLights);
+  RedirectJump(0x756600, &EnableLights);
+  RedirectJump(0x756260, &EnableLights);
+  RedirectCall(0x5D9A89, &empty_void);
+  RedirectCall(0x5D9A92, &empty_void);
 }
 void fix_ShadowRendering()
 {
@@ -99,8 +151,16 @@ void fix_PostFXRendering()
   //              reinterpret_cast<void *>(
   //                  empty_void ) ); // PostEffects__Initialise
   RedirectCall( 0x53E227, reinterpret_cast<void *>( true_ret_hook ) ); // PostEffects__Render
+  //RedirectCall( 0x53E170, reinterpret_cast<void *>( empty_void ) ); // RenderEffects
 }
 
+void fix_Culling()
+{
+  // TODO: Replace with proper culling mode, maybe reimplement game's culling function completely
+  RedirectJump(0x7201C0, &empty_void); // occlusion culling
+  RedirectJump(0x536BC0, &true_ret_hook); // occlusion culling(entity visibility check)
+  RedirectJump(0x534540, &true_ret_hook); // occlusion culling(entity on screen check), might break stuff
+}
 void GTA_RemixBugFix_Inject()
 {
   fix_Lighting();
@@ -108,6 +168,7 @@ void GTA_RemixBugFix_Inject()
   fix_ShadowRendering();
   fix_MirrorRendering();
   fix_PostFXRendering();
+  fix_Culling();
 
   //RedirectCall(
   //    0x53EAC4,
